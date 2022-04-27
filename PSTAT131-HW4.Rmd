@@ -1,0 +1,58 @@
+---
+title: "PSTAT131-HW4"
+author: "Ephets Head"
+date: "4/25/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+**Load the dataset `titanic` into R, and turn variables `pclass` and `survived` into factors.**
+
+```{r, echo=FALSE}
+#load packages
+library(tidymodels)
+library(tidyverse)
+
+#load data set
+titanic <-read_csv("data2/titanic.csv", show_col_types=FALSE)
+titanic
+
+#factor pclass and survived
+titanic$pclass <- factor(titanic$pclass)
+titanic$survived <- factor(titanic$survived)
+
+#re-assign the base level of the factored variable "survived" to be "Yes"
+titanic$survived <- relevel(titanic$survived, "Yes")
+
+```
+
+**Create a recipe identical to the one in HW 3.**
+
+```{r}
+titanic_recipe <- 
+  recipe(survived ~ pclass + sex + age + sib_sp + parch + fare, data=titanic) %>%
+  step_impute_linear() %>%
+  step_dummy(sex) %>%
+  step_interact(~ starts_with("sex"):fare) %>%
+  step_interact(~ age:fare) 
+```
+
+
+**Question 1: Split the data, stratifying by the outcome variable `survived`. **
+
+```{r}
+set.seed(0427)
+
+titan_split <- initial_split(titanic, strata = survived, prop=0.7)
+titan_train <- training(titan_split)
+titan_test <- testing(titan_split)
+
+#verify that each set has an appropriate number of observations
+dim(titan_split)
+```
+
+The training set has 623 observations, while the testing set has 268.
+
+**Question 2: **
