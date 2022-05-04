@@ -8,13 +8,27 @@ output: pdf_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
 **Load the dataset `titanic` into R, and turn variables `pclass` and `survived` into factors.**
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, include=FALSE}
 #load packages
 library(tidymodels)
 library(tidyverse)
+library(rsample)
+library(ggplot2)
+library(kernlab)
+library(dplyr)
+library(discrim)
+library(klaR)
+library(caret)
+library(tune)
+library(purrr)
+library(workflowsets)
+library(workflows)
+```
 
+```{r}
 #load data set
 titanic <-read_csv("data2/titanic.csv", show_col_types=FALSE)
 titanic
@@ -27,18 +41,6 @@ titanic$survived <- factor(titanic$survived)
 titanic$survived <- relevel(titanic$survived, "Yes")
 
 ```
-
-**Create a recipe identical to the one in HW 3.**
-
-```{r}
-titanic_recipe <- 
-  recipe(survived ~ pclass + sex + age + sib_sp + parch + fare, data=titanic) %>%
-  step_impute_linear() %>%
-  step_dummy(sex) %>%
-  step_interact(~ starts_with("sex"):fare) %>%
-  step_interact(~ age:fare) 
-```
-
 
 **Question 1: Split the data, stratifying by the outcome variable `survived`. **
 
@@ -55,4 +57,172 @@ dim(titan_split)
 
 The training set has 623 observations, while the testing set has 268.
 
-**Question 2: **
+**Create an identical recipe to the one in HW 3. **
+
+```{r}
+titan_recipe <- recipe(survived ~ pclass + sex + age + sib_sp + parch + fare, data=titan_train) %>%
+  step_impute_linear() %>%
+  step_dummy(sex) %>%
+  step_interact(~ starts_with("sex"):fare) %>%
+  step_interact(~ age:fare) 
+```
+
+**Question 2: For the training data, use k-fold cross validation, with $k=10$. Use the same basic recipe as in HW 3.**
+
+```{r}
+#first we will create a tuned recipe
+titanic_tuned_recipe <- 
+  recipe(survived ~ pclass + sex + age + sib_sp + parch + fare, data=titan_train) %>%
+  step_impute_linear() %>%
+  step_dummy(sex) %>%
+  step_interact(~ starts_with("sex"):fare) %>%
+  step_interact(~ age:fare) %>%
+  step_poly(degree=tune())
+
+#next we will create a k-fold dataset
+titan_folds <- vfold_cv(titan_train, v=10)
+
+#before we create a workflow, we must specify a basic regression model 
+logr_model<- 
+  logistic_reg() %>%
+  set_engine("glm") %>%
+  set_mode("classification")
+
+titan_kfold_wf <- workflow() %>%
+  add_recipe(titanic_tuned_recipe) %>%
+  add_model(logr_model)
+
+titan_degree_grid <- grid_regular(degree(range=c(1,10)),levels=10)
+
+#finally we fold the training data using our workflow and k-fold dataset
+titanic_res <- tune_grid(
+  titan_kfold_wf,
+  resamples = titan_folds,
+  grid=10
+)
+```
+
+
+**Question 3: In your own words, explain what we are doing in Question 2. What is k-fold cross-validation? Why should we use it, rather than simply fitting and testing models on the entire training set? If we did use the entire training set, what re-sampling method would that be?**
+
+In k-fold cross validation, we divide our data into 'k' folds - in this case, 10 - where each fold is a set of similar size. For each re-sampling, one fold is set aside as the testing data while the rest are used for training the model. The accuracy of the trained model is then calculated using the "testing" (or validation) fold data. Averaging these cross-validation accuracies gives us a good estimate of the accuracy of our model. 
+
+Using k-fold cross-validation allows us to test more models given the same limited data, as each data point is still used only once as testing data. If we were to use the entire training set to fit our model, this is simply called cross-validation.
+
+
+**Question 4: Set up workflows for 3 models:**
+
+*1. A logistic regression with the `glm` engine:*
+
+```{r}
+#Part 1: specify and store a logistic regression model using the glm engine
+logress_model<- 
+  logistic_reg() %>%
+  set_engine("glm") 
+
+#Part 2: create a workflow and add our model and recipe
+logr_flow <- 
+  workflow() %>%
+  add_model(logress_model) %>%
+  add_recipe(titanic_tuned_recipe)
+
+```
+
+*2. A linear discriminant analysis with the `MASS` engine:*
+
+```{r}
+#Part 1: specify and store a linear discriminant model using the mass engine
+ld_model <- 
+  discrim_linear() %>%
+  set_mode("classification") %>%
+  set_engine("MASS")
+
+#Part 2: create a workflow and add our model and recipe
+ld_flow <- 
+  workflow() %>%
+  add_model(ld_model) %>%
+  add_recipe(titanic_tuned_recipe)
+
+```
+
+*3. A quadratic discriminant analysis with the `MASS` engine.*
+
+```{r}
+#Part 1: specify and store a quadratic discriminant model using the mass engine
+qd_model <- 
+  discrim_quad() %>%
+  set_mode("classification") %>%
+  set_engine("MASS")
+
+#Part 2: create a workflow and add our model and recipe
+qd_flow <- 
+  workflow() %>%
+  add_model(qd_model) %>%
+  add_recipe(titanic_tuned_recipe)
+
+```
+
+**How many models total, across all folds, will you be fitting to the data? **
+
+There are 10 folds, and we will be fitting the three models we have specified above to each fold. This means we will have a total of 30 fitted models. 
+
+**Question 5: Fit each of the models created in question 4 to the folded data.**
+
+```{r}
+#first we will create a workflow set
+wf_set <- workflow_set(
+  preproc = list(tuned = titanic_tuned_recipe),
+  models = list(Logistic_Reg = logress_model, Linear_Discr = ld_model, Quadr_Discr = qd_model)
+)
+#now we will fit the three workflows to the folded data
+```
+
+```{r, include=FALSE}
+
+fitted_folded <- suppressWarnings(wf_set %>%
+  workflow_map(
+    seed=1002,
+    resamples= titan_folds,
+    grid=30 
+  ))
+
+
+```
+
+**Question 6: Use collect_metrics() to print the mean and standard errors of the performance metric *accuracy* across all folds for each of the three models. Decide which of the models has performed the best. Explain why.**
+
+```{r}
+metrics <- collect_metrics(fitted_folded)
+cols_metrics <- metrics[c(1,5,7,9)]
+acc_metrics <- cols_metrics %>% 
+  filter(.metric == "accuracy")
+
+acc_metrics
+```
+The Quadratic Discriminant Analysis model has the largest standard error and the smallest mean accuracy, so it clearly performs the worst. As for which model performs the best, we will select the model with the highest mean accuracy (which would be the logistic regression model), despite the Linear Discriminant Analysis model having a slightly lower standard error. 
+
+**Question 7: Now that you've chosen a model, fit your chosen model to the entire training dataset (not the folds). **
+
+```{r}
+logr_flow_untuned <- workflow() %>%
+  add_model(logress_model) %>%
+  add_recipe(titan_recipe) 
+
+titanic_best_model <- fit(logr_flow_untuned, data= titan_train)
+```
+
+**Question 8: Finally, with your fitted model, use `predict()`, `bind_cols()`, and `accuracy()` to assess your model's performance on the testing data!**
+
+```{r}
+#first we create a vector of the model's fitted values on the testing data
+testing_predictions <- predict(titanic_best_model, new_data=titan_test)
+
+#next we create a vector of the testing data's actual observed outcomes
+testing_observ <- titan_test$survived
+
+#then we combine the predicted and actual values in a tibble
+testing_results <- bind_cols(.pred_class = testing_predictions, outcome = testing_observ)
+
+accuracy(data=testing_results, truth=titan_test$survived,estimate=.pred_class)
+```
+Therefore, our accuracy on the testing data is about 0.786, which is (as expected) significantly lower than how it performed on the training data. The model still performs fairly well.
